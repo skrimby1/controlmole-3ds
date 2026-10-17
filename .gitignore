@@ -1,0 +1,12 @@
+build/
+plugin/Build/
+romfs/gfx/
+dist/
+*.3dsx
+*.smdh
+*.elf
+*.map
+*.3gx
+*.plgInfo
+*.cia
+__pycache__/
