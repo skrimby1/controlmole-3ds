@@ -59,8 +59,30 @@ static int readPtmMode(PlayEntry* buf, int max, bool relative, u32* outStart, u3
 
 static bool isApp(u64 tid) { return (tid >> 32) == 0x00040000; }
 
+// Games (and days) the plugin logged itself. The Activity Log only fills in
+// the rest: games where Mole's plugin didn't run, e.g. because another plugin
+// (Vapecord in New Leaf, CTGP-7 in Mario Kart 7) loads there instead, since
+// Luma loads one plugin per game.
+typedef struct {
+  u64 tid;
+  s64 day;
+} Covered;
+static Covered covered[MAX_SITTINGS];
+static int nCovered, fromLogAdded;
+static bool filling;  // pushing Activity Log sittings
+
+static bool isCovered(u64 tid, s64 day) {
+  for (int i = 0; i < nCovered; i++)
+    if (covered[i].tid == tid && covered[i].day == day) return true;
+  return false;
+}
+
 static void push(u64 tid, s64 a, s64 b) {
   if (b <= a || playlog.count >= MAX_SITTINGS || tid == SELF_TID) return;
+  if (filling) {
+    if (isCovered(tid, dayStart(a))) return;
+    fromLogAdded++;
+  }
   playlog.s[playlog.count++] = (Sitting){tid, a, b};
 }
 
@@ -171,9 +193,19 @@ void playlogLoad(void) {
   playlog.count = 0;
   playlog.real = true;
   ptmDebug();
-  if (fromPlugin()) {
+  int fromMole = fromPlugin();
+  nCovered = 0;
+  for (int i = 0; i < playlog.count && nCovered < MAX_SITTINGS; i++)
+    if (!isCovered(playlog.s[i].tid, dayStart(playlog.s[i].start)))
+      covered[nCovered++] = (Covered){playlog.s[i].tid, dayStart(playlog.s[i].start)};
+  filling = true, fromLogAdded = 0;
+  fromPtm();
+  filling = false;
+  if (fromMole && fromLogAdded) {
+    playlog.source = "both";
+  } else if (fromMole) {
     playlog.source = "Mole's plugin";
-  } else if (fromPtm()) {
+  } else if (fromLogAdded) {
     playlog.source = "Activity Log";
   } else {
     playlog.real = false;

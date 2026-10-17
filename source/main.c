@@ -1,6 +1,8 @@
 #include <3ds.h>
 #include <citro2d.h>
+#include <dirent.h>
 #include <math.h>
+#include <strings.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -358,8 +360,10 @@ static u32 toneColor(int tone) { return tone == 0 ? C_GOOD : tone == 1 ? C_WARN 
 static void drawToday(void) {
   section(4, 4, BOT_W - 8, 200, "HOW YOU PLAYED TODAY");
   // Where the minutes come from, so a wrong number can be traced.
-  text(BOT_W - 14, 11, !playlog.real ? "SAMPLE DAY" : playlog.source[0] == 'M' ? "from Mole's plugin"
-                                                                        : "from the Activity Log",
+  text(BOT_W - 14, 11, !playlog.real ? "SAMPLE DAY"
+                       : playlog.source[0] == 'M' ? "from Mole's plugin"
+                       : playlog.source[0] == 'b' ? "plugin + Activity Log"
+                                                  : "from the Activity Log",
        C_MUTED, ALIGN_RIGHT);
   char buf[32];
   snprintf(buf, sizeof buf, "%d", score.total);
@@ -459,7 +463,43 @@ static bool pluginInstalled(void) {
   return rulesPlugin;
 }
 
+// Games that have their own plugin (a /luma/plugins/<title ID>/ folder with a
+// .3gx): Luma loads that one there instead of Mole.
+static int otherPlugins = -1;
+
+static int countOtherPlugins(void) {
+  if (otherPlugins >= 0) return otherPlugins;
+  otherPlugins = 0;
+  DIR* d = opendir("sdmc:/luma/plugins");
+  if (!d) return 0;
+  struct dirent* e;
+  while ((e = readdir(d))) {
+    if (strlen(e->d_name) != 16 || strspn(e->d_name, "0123456789ABCDEFabcdef") != 16) continue;
+    char path[64];
+    snprintf(path, sizeof path, "sdmc:/luma/plugins/%s", e->d_name);
+    DIR* g = opendir(path);
+    if (!g) continue;
+    struct dirent* f;
+    while ((f = readdir(g))) {
+      const char* dot = strrchr(f->d_name, '.');
+      if (dot && !strcasecmp(dot, ".3gx")) {
+        otherPlugins++;
+        break;
+      }
+    }
+    closedir(g);
+  }
+  closedir(d);
+  return otherPlugins;
+}
+
 static void pluginStatus(char* buf, int n) {
+  if (pluginInstalled() && pluginLastTid && countOtherPlugins()) {
+    // Another plugin wins in those games; their time still counts (Activity Log).
+    snprintf(buf, n, "running; %d game%s use%s another plugin", otherPlugins,
+             otherPlugins == 1 ? "" : "s", otherPlugins == 1 ? "s" : "");
+    return;
+  }
   if (!pluginInstalled()) {
     snprintf(buf, n, "needs Mole's Luma plugin");
   } else if (!pluginLastTid) {
@@ -829,7 +869,7 @@ static void switchTabDir(Tab t, int dir) {
   slideFrom = tab, slideDir = dir, slideAt = tick;
   sfx(SFX_TAB);
   if (tab == TAB_RULES) saveRules();
-  if (t == TAB_RULES) rulesPlugin = -1, scope = -1, heldRow = -1;
+  if (t == TAB_RULES) rulesPlugin = -1, otherPlugins = -1, scope = -1, heldRow = -1;
   tab = t, scrollY = 0, cursor = 0;
   if (t == TAB_TROPHIES) sayTrophy(0);
   else if (t == TAB_RULES) say1("These are our rules. Tap a day up top to give it its own, "

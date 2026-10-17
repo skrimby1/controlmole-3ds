@@ -88,10 +88,87 @@ static bool afterBedtime(const Rules& r, s64 t) {
   return bed < 5 ? h >= bed && h < 5 : h >= bed || h < 5;
 }
 
-// Seconds already played today in counted games, from the log.
-static s64 playedToday(const Rules& r) {
+// Today's minutes from the 3DS's own Activity Log (ptm:play), for the games
+// Mole's plugin didn't log itself: Luma loads one plugin per game, so where
+// another one runs (Vapecord in New Leaf, CTGP-7 in Mario Kart 7) Mole isn't
+// there, but the time still counts and he steps in at the next game.
+// Same reading as the app's playlog.c (entries: TID high, TID low, minutes
+// since 2000 << 4 | event).
+static void plog(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+
+struct PtmEntry {
+  u32 tidHigh, tidLow, w;
+};
+
+static u32 ptmCmd(Handle h, u32 header) {
+  u32* c = getThreadCommandBuffer();
+  c[0] = header, c[1] = 0, c[2] = 0;
+  if (R_FAILED(svcSendSyncRequest(h)) || R_FAILED((Result)c[1])) return 0;
+  return c[2];
+}
+
+static s64 ptmToday(const Rules& r, const std::vector<u64>& logged, u64 self) {
+  static PtmEntry e[1024];
+  Handle h;
+  if (R_FAILED(srvGetServiceHandle(&h, "ptm:play"))) return 0;
+  const u32 RING = 0x11D28;
+  u32 start = ptmCmd(h, IPC_MakeHeader(0x808, 0, 0)), len = ptmCmd(h, IPC_MakeHeader(0x809, 0, 0));
+  int n = 0;
+  if (len && len <= RING) {
+    u32 skip = len > 1024 ? len - 1024 : 0;
+    for (u32 i = skip; i < len;) {
+      u32 chunk = len - i > 128 ? 128 : len - i;
+      memset(&e[n], 0, chunk * sizeof(PtmEntry));
+      u32* c = getThreadCommandBuffer();
+      c[0] = IPC_MakeHeader(0x807, 2, 2);
+      c[1] = (start + i) % RING;
+      c[2] = chunk;
+      c[3] = IPC_Desc_Buffer(chunk * sizeof(PtmEntry), IPC_BUFFER_W);
+      c[4] = (u32)&e[n];
+      if (R_FAILED(svcSendSyncRequest(h)) || R_FAILED((Result)c[1])) break;
+      n += chunk, i += chunk;
+    }
+  }
+  svcCloseHandle(h);
+  s64 t = now(), d = dayStart(t), total = 0, openAt = 0;
+  u64 open = 0;
+  auto counts = [&](u64 tid) {
+    if (tid == self || tid == 0x000400000C0DE500ULL) return false;
+    for (u64 k : logged) if (k == tid) return false;
+    for (u64 k : r.skip) if (k == tid) return false;
+    return true;
+  };
+  auto close = [&](s64 at) {
+    s64 a = openAt < d ? d : openAt;
+    if (open && counts(open) && at > a) total += at - a;
+    open = 0;
+  };
+  for (int i = 0; i < n; i++) {
+    u64 tid = (u64)e[i].tidHigh << 32 | e[i].tidLow;
+    if ((tid >> 32) != 0x00040000 && tid != ~0ULL) {
+      u64 sw = (u64)e[i].tidLow << 32 | e[i].tidHigh;  // the other word order
+      if ((sw >> 32) == 0x00040000) tid = sw;
+    }
+    int ev = e[i].w & 0xF;
+    s64 at = 946684800LL + (s64)(e[i].w >> 4) * 60;
+    if (at > t + 86400) continue;
+    if (tid == ~0ULL) {
+      if (ev == 8 || ev == 0xA) close(at);
+      continue;
+    }
+    if ((tid >> 32) != 0x00040000 || (ev & 2)) continue;  // applets don't count
+    if (ev == 0 || ev == 4) close(at), open = tid, openAt = at;
+    else if ((ev == 1 || ev == 5) && open == tid) close(at);
+  }
+  return total;
+}
+
+// Seconds already played today in counted games: the plugin's own log, plus
+// the Activity Log for games it didn't log.
+static s64 playedToday(const Rules& r, u64 self) {
   std::string s = readAll(std::string(DIR) + "/plays.log");
   s64 d = dayStart(now()), total = 0;
+  std::vector<u64> logged;
   size_t at = 0;
   while (at < s.size()) {
     size_t e = s.find('\n', at);
@@ -103,10 +180,18 @@ static s64 playedToday(const Rules& r) {
       for (u64 k : r.skip) skipped |= k == tid;
       if (a < d) a = d;
       if (!skipped && b > a) total += b - a;
+      if (b > d) {
+        bool seen = false;
+        for (u64 k : logged) seen |= k == tid;
+        if (!seen) logged.push_back(tid);
+      }
     }
     at = e + 1;
   }
-  return total;
+  logged.push_back(self);  // this game is counted live, below
+  s64 extra = ptmToday(r, logged, self);
+  if (extra) plog("activity log adds %lld min today", extra / 60);
+  return total + extra;
 }
 
 static bool usedGraceToday() {
@@ -691,7 +776,7 @@ int main(void) {
   bool counted = true;
   for (u64 k : rules.skip) counted &= k != tid;
 
-  s64 before = playedToday(rules), day = dayStart(now());
+  s64 before = playedToday(rules, tid), day = dayStart(now());
   s64 mine = 0;  // seconds this run
   Sitting cur(tid);
   bool wasAway = true, warned = false;

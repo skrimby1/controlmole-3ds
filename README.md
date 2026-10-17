@@ -2,6 +2,8 @@
 
 A homebrew version of [ControlMole](https://controlmole.app) for the Nintendo 3DS. Mole keeps an eye on how long you play: you set a daily limit and a bedtime, and when time's up he pops out of his molehill over your game and tells you to call it a day.
 
+![Mole stopping a game](screenshots/mole.gif)
+
 ![Screenshots](screenshots/screens.png)
 
 There are two parts:
