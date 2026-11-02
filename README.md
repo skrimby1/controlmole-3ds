@@ -1,3 +1,7 @@
+# App | Promotion
+
+A heeds up is that the mod also exists as an app for your phone (which i developed), for both Android and IOS. You can check it out at https://controlmole.app/
+
 # ControlMole for 3DS
 
 A homebrew version of [ControlMole](https://controlmole.app) for the Nintendo 3DS. Mole keeps an eye on how long you play: you set a daily limit and a bedtime, and when time's up he pops out of his molehill over your game and tells you to call it a day.
