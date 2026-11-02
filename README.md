@@ -33,6 +33,3 @@ The build runs in Docker, so you don't need devkitPro installed:
 
 That gives you `ControlMole.3dsx` and `plugin/ControlMole.3gx`. If [makerom](https://github.com/3DSGuy/Project_CTR) and [bannertool](https://github.com/carstene1ns/3ds-bannertool) are in `~/Tools` (or you point `MAKEROM` and `BANNERTOOL` at them), you get `ControlMole.cia` as well. `./build.sh clean` cleans up.
 
-## Status
-
-So far it has only been tested in the [Azahar](https://azahar-emu.org) emulator. Reading play time from the 3DS Activity Log hasn't been tried on a real console yet, and when that doesn't work the app falls back to the plugin's own log. If you try it on hardware, I'd love to hear how it went.
