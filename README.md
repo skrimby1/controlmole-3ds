@@ -1,6 +1,6 @@
 # App | Promotion
 
-A heeds up is that the mod also exists as an app for your phone (which i developed), for both Android and IOS. You can check it out at https://controlmole.app/
+Heads up, the mod also exists as an app for your phone (which i developed), for both Android and IOS. You can check it out at https://controlmole.app/ ᕙ(  •̀ ᗜ •́  )ᕗ 
 
 # ControlMole for 3DS
 
