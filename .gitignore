@@ -7,6 +7,5 @@ dist/
 *.elf
 *.map
 *.3gx
-*.plgInfo
 *.cia
 __pycache__/

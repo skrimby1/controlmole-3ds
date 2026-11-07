@@ -1,0 +1,23 @@
+Author: Kairi Labs
+
+Version:
+    Major: 1
+    Minor: 0
+    Revision: 0
+
+Targets: # 0 for all games
+
+Title: ControlMole
+
+Summary: Mole keeps your play time in check
+
+Description: |
+  Counts the minutes you play in every game and writes them where the
+  ControlMole app can read them. When your daily limit is up, Mole pops up
+  in the game and asks you to call it a day.
+
+Compatibility: Any
+
+MemorySize: 5MiB
+
+UsePrivateMemory: false
