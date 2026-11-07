@@ -1,10 +1,12 @@
 #include <3ds.h>
 #include <CTRPluginFramework.hpp>
 
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -496,7 +498,7 @@ static const int MOLE_X = 40, CAM_BURST = 12, CAM_MOLE = 6 - 129;
 static double seconds() { return svcGetSystemTick() / (double)SYSCLOCK_ARM11; }
 static float ease(float t) { return t < 0 ? 0 : t > 1 ? 1 : t < 0.5f ? 4 * t * t * t : 1 - (-2 * t + 2) * (-2 * t + 2) * (-2 * t + 2) / 2; }
 
-static void drawBottom(const Canvas& c, bool bedtime, int minutes, int limit, bool grace) {
+static void drawBottom(const Canvas& c, bool bedtime, int minutes, int limit, bool grace, bool keep) {
   c.paper();
   c.box(12, 16, 296, 116, CREAM);
   c.text(22, 24, bedtime ? "IT'S BEDTIME" : "TIME'S UP FOR TODAY", MUTED);
@@ -529,6 +531,8 @@ static void drawBottom(const Canvas& c, bool bedtime, int minutes, int limit, bo
   } else {
     c.text(160, 194, "(you already had your save break)", MUTED, true);
   }
+  c.text(160, 222, keep ? (bedtime ? "Paused till morning, close the lid" : "Paused till tomorrow, close the lid")
+                        : "X  keep my game paused instead", MUTED, true);
 }
 
 // The top screen at time [t] (seconds since Mole came in). Returns how many
@@ -585,16 +589,38 @@ static int drawTop(const Fb& f, u8* snap, bool& boxBaked, double t, const Timeli
   return typed;
 }
 
+// The top screen when there was no memory for the snapshot: dim the game in
+// place once and draw Mole with his whole line, standing still.
+static void drawTopStill(bool dim) {
+  for (int k = 0; k < 2; k++) {
+    Fb f(OSD::GetTopScreen(), 400, 240);
+    if (!f.ok()) return;
+    if (dim)
+      for (int y = 0; y < 240; y++)
+        for (int x = 0; x < 400; x++) f.put(x, y, f.enc(lerp(f.dec(f.raw(x, y)), INK, 0.6f)));
+    Canvas c(f);
+    c.mole(FURIOUS_RLE + FURIOUS_OFF[0], MOLE_X + FURIOUS_X, CAM_MOLE + FURIOUS_Y, FURIOUS_W, FURIOUS_H);
+    c.box(8, 162, 384, 72, CREAM);
+    c.box(18, 151, 44, 17, CHESTNUT);
+    c.text(40, 155, "MOLE", CREAM, true);
+    c.wrap(18, 174, 360, moleLine, INK, 999);
+    OSD::SwapBuffers();
+  }
+}
+
 // For bedtime, [limit] is the bedtime hour. Returns true if they took the
-// save break; walking away never returns.
-static bool block(bool bedtime, int minutes, int limit) {
+// save break. Walking away never returns, and keeping the game paused returns
+// false once the rules let them play again (the next day, or 05:00 after a
+// bedtime).
+static bool block(const Rules& rules, bool bedtime, int minutes, int limit) {
   plog("block: %s, %d of %d min, title %016llX", bedtime ? "bedtime" : "limit", minutes, limit,
        Process::GetTitleID());
   Process::Pause();
   plog("paused");
   soundsInit();
   plog("sounds ready");
-  bool grace = !usedGraceToday();
+  bool grace = !usedGraceToday(), keep = false;
+  s64 blockDay = dayStart(now());
   if (bedtime)
     snprintf(moleLine, sizeof moleLine,
              "Uh-huh, I see you playing past %02d:00! Even moles go to bed eventually, and "
@@ -617,9 +643,10 @@ static bool block(bool bedtime, int minutes, int limit) {
   }
   plog("fb ok, right eye %s", top.right ? "on" : "off");
   // The dimmed game, built once in the framebuffer's own layout.
-  u8* dimmed = new u8[top.bytes];
-  top.save(dimmed);
-  {
+  u8* dimmed = new (std::nothrow) u8[top.bytes];
+  if (!dimmed) plog("no memory for the snapshot, drawing him still");
+  else top.save(dimmed);
+  if (dimmed) {
     Fb d(top, dimmed);
     for (int y = 0; y < 240; y++)
       for (int x = 0; x < 400; x++) {
@@ -633,11 +660,16 @@ static bool block(bool bedtime, int minutes, int limit) {
   bool baked = false;
   for (int i = 0; i < 2; i++) {
     Fb b(OSD::GetBottomScreen(), 320, 240);
-    drawBottom(Canvas(b), bedtime, minutes, limit, grace);
+    drawBottom(Canvas(b), bedtime, minutes, limit, grace, keep);
+    if (!dimmed) {
+      OSD::SwapBuffers();
+      continue;
+    }
     Fb t(OSD::GetTopScreen(), 400, 240);
     drawTop(t, dimmed, baked, 0, Timeline{1, 2, 3}, false);
     OSD::SwapBuffers();
   }
+  if (!dimmed) drawTopStill(true);
   plog("first frames drawn");
   Timeline tl;
   tl.burstEnd = (BURST_FRAMES + 8) / 30.0;
@@ -654,12 +686,32 @@ static bool block(bool bedtime, int minutes, int limit) {
   while (true) {
     double t = seconds() - start;
     if (++frames && !fpsLogged && t > 5) fpsLogged = true, plog("%.1f fps", frames / t);
-    Fb f(OSD::GetTopScreen(), 400, 240);
-    int typed = drawTop(f, dimmed, baked, t, tl, skip);
-    OSD::SwapBuffers();
-    for (int k = lastTyped; k < typed; k++)
+    int typed = len;
+    if (dimmed) {
+      Fb f(OSD::GetTopScreen(), 400, 240);
+      typed = drawTop(f, dimmed, baked, t, tl, skip);
+      OSD::SwapBuffers();
+    } else {
+      Sleep(Milliseconds(16));
+    }
+    // One blip a frame at most: when the frame rate drops (or A skips the
+    // line), the letters it jumped over stay quiet instead of all at once.
+    if (typed > lastTyped) {
+      int k = typed - 1;
+      while (k > lastTyped && (k % 2 || !isalnum((unsigned char)moleLine[k]))) k--;
       if (k % 2 == 0) babble(moleLine[k]);
+    }
     lastTyped = typed;
+    // Keeping the game paused: let it go once the rules allow playing again.
+    if (keep && (frames % 30) == 0) {
+      s64 n = now();
+      if (!afterBedtime(rules, n) && (bedtime || dayStart(n) != blockDay)) {
+        plog("kept game released");
+        delete[] dimmed;
+        Process::Play();
+        return false;
+      }
+    }
     // Buttons: every new press counts, and so does tapping the two buttons on
     // the touch screen (the red one is A, the cream one B).
     Controller::Update();
@@ -671,12 +723,14 @@ static bool block(bool bedtime, int minutes, int limit) {
       UIntVector p = Touch::GetPosition();
       if (p.x >= 40 && p.x < 280 && p.y >= 142 && p.y < 180) down |= Key::A | (1u << 31);
       if (grace && p.x >= 70 && p.x < 250 && p.y >= 182 && p.y < 214) down |= Key::B;
+      if (!keep && p.y >= 216) down |= Key::X;
     }
     prevTouch = touch;
     if (down & Key::A) {
       if (typed < len && !(down & (1u << 31))) {  // A first: Mole in place, the whole line
         skip = true;
         start = seconds() - tl.boxEnd - len / 30.0 - 1;
+        lastTyped = len;
         continue;
       }
       sndAccept->Play();
@@ -685,6 +739,33 @@ static bool block(bool bedtime, int minutes, int limit) {
       Sleep(Milliseconds(150));
       delete[] dimmed;
       Process::ReturnToHomeMenu();
+    }
+    if (!keep && (down & Key::X)) {
+      // Keep the game where it is: it stays paused under Mole, the lid can
+      // close on it, and tomorrow it carries on from the same spot.
+      keep = true;
+      sndPlop->Play();
+      plog("keep paused");
+      logEvent("keep");
+      snprintf(moleLine, sizeof moleLine,
+               "Okay, I'll hold your spot! Close the lid and get some rest, and your game will "
+               "be right here waiting %s, dig dig!", bedtime ? "in the morning" : "tomorrow");
+      len = strlen(moleLine);
+      skip = true, lastTyped = 0;
+      start = seconds() - tl.boxEnd;
+      for (int k = 0; k < 2; k++) {
+        Fb b(OSD::GetBottomScreen(), 320, 240);
+        drawBottom(Canvas(b), bedtime, minutes, limit, grace, keep);
+        if (!dimmed) {
+          OSD::SwapBuffers();
+          continue;
+        }
+        Fb t(OSD::GetTopScreen(), 400, 240);
+        drawTop(t, dimmed, baked, seconds() - start, tl, skip);
+        OSD::SwapBuffers();
+      }
+      if (!dimmed) drawTopStill(false);
+      continue;
     }
     if (grace && (down & Key::B)) {
       sndPlop->Play();
@@ -766,10 +847,14 @@ void PatchProcess(FwkSettings& settings) {
 void OnProcessExit(void) {}
 
 int main(void) {
-  Process::SetProcessEventCallback(onEvent);
-  OSD::Run(headsUpOsd);
   u64 tid = Process::GetTitleID();
   if (tid == 0x000400000C0DE500ULL) return 0;  // ControlMole itself: nothing to watch
+  // Only games and apps count: Luma also loads plugins into System Settings,
+  // the Camera, Sound and the other built-in titles (0004001x), and Mole has
+  // no business in there.
+  if ((tid >> 32) != 0x00040000) return 0;
+  Process::SetProcessEventCallback(onEvent);
+  OSD::Run(headsUpOsd);
   // The app shows this line, so you can tell the plugin is really running.
   plog("start %016llX", tid);
   Rules rules = readRules();
@@ -824,7 +909,7 @@ int main(void) {
     bool late = afterBedtime(rules, t);
     if ((left <= 0 || late) && t >= graceUntil) {
       writeSitting(cur);
-      if (block(late && left > 0, minutes, late && left > 0 ? bedtimeTonight(rules, t) : limit))
+      if (block(rules, late && left > 0, minutes, late && left > 0 ? bedtimeTonight(rules, t) : limit))
         graceUntil = now() + 3 * 60;
     }
   }
