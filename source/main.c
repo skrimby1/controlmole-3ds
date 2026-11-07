@@ -445,7 +445,12 @@ static s64 pluginLastAt;
 
 static bool pluginInstalled(void) {
   if (rulesPlugin < 0) {
+    // Luma only loads /luma/plugins/default.3gx (or a .3gx in a title's own
+    // folder), so a plugin copied in under its own name never runs: give it
+    // the name Luma looks for.
     FILE* f = fopen("sdmc:/luma/plugins/default.3gx", "r");
+    if (!f && rename("sdmc:/luma/plugins/ControlMole.3gx", "sdmc:/luma/plugins/default.3gx") == 0)
+      f = fopen("sdmc:/luma/plugins/default.3gx", "r");
     rulesPlugin = f != NULL;
     if (f) fclose(f);
     pluginLastTid = 0, pluginLastAt = 0;

@@ -25,7 +25,7 @@ You need a 3DS with [Luma3DS](https://github.com/LumaTeam/Luma3DS) installed.
 4. If you want sound in the app, dump your DSP firmware with [DSP1](https://github.com/zoogie/DSP1) once.
 5. Open ControlMole and set your rules.
 
-It has to be named exactly `default.3gx` and sit straight in `sdmc:/luma/plugins/`, not in a folder of its own, and it needs a Luma3DS with the plugin loader (v13 or newer). The screen flashes blue when a game starts if the plugin loaded. If Mole never shows up, open the Rules tab in the app: it says when the plugin last ran and in which game.
+It has to be named exactly `default.3gx` and sit straight in `sdmc:/luma/plugins/`, not in a folder of its own (if you copied it there as `ControlMole.3gx`, the app renames it for you when you open the Rules tab), and it needs a Luma3DS with the plugin loader (v13 or newer). The screen flashes blue when a game starts if the plugin loaded. If Mole never shows up, open the Rules tab in the app: it says when the plugin last ran and in which game.
 
 The app and the plugin share their files in `sdmc:/3ds/ControlMole/`: `settings.ini` holds your rules, and `plays.log` gets a line for every play session.
 
