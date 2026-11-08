@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "gen_block.h"
+#include "gen_looks.h"
 #include "gen_sounds.h"
 
 namespace CTRPluginFramework {
@@ -27,6 +28,7 @@ struct Rules {
   bool own[7] = {};
   int dayLimit[7] = {}, dayBed[7] = {};
   std::vector<u64> skip;
+  int fur = 0, band = 0;  // Dress up's colours (the app's look= line)
 };
 
 static const int NO_LIMIT = 24 * 60;
@@ -57,6 +59,13 @@ static Rules readRules() {
     else if (sscanf(line.c_str(), "bedtime_on=%lld", &v) == 1) r.bedtimeOn = v;
     else if (sscanf(line.c_str(), "bedtime_hour=%lld", &v) == 1) r.bedtimeHour = v;
     else if (sscanf(line.c_str(), "skip=%llx", &tid) == 1) r.skip.push_back(tid);
+    else if (line.compare(0, 5, "look=") == 0) {
+      // fur/band/hat/outfit/accessory; the pieces come as files (loadPieces).
+      size_t a = 5, b = line.find('/', a), c = b == std::string::npos ? b : line.find('/', b + 1);
+      std::string fur = line.substr(a, b - a), band = b == std::string::npos ? "" : line.substr(b + 1, c - b - 1);
+      for (u32 i = 0; i < sizeof FUR_KEYS / sizeof FUR_KEYS[0]; i++) if (fur == FUR_KEYS[i]) r.fur = i;
+      for (u32 i = 0; i < sizeof BAND_KEYS / sizeof BAND_KEYS[0]; i++) if (band == BAND_KEYS[i]) r.band = i;
+    }
     else {
       int d, lim, bed;
       if (sscanf(line.c_str(), "day_%d=%d,%d", &d, &lim, &bed) == 3 && d >= 0 && d < 7)
@@ -371,6 +380,69 @@ struct Fb {
   }
 };
 
+// Mole's palette in his Dress up fur and headband (gen_looks.h).
+static u32 molePal[sizeof(MOLE_PAL) / 4];
+static u32 paletteVersion;
+
+static void dressPalette(int fur, int band) {
+  memcpy(molePal, MOLE_PAL, sizeof molePal);
+  for (int k = FUR_PAL_AT[fur]; k < FUR_PAL_AT[fur + 1]; k++) molePal[FUR_PAL[2 * k]] = FUR_PAL[2 * k + 1];
+  for (int k = BAND_PAL_AT[band]; k < BAND_PAL_AT[band + 1]; k++)
+    molePal[BAND_PAL[2 * k]] = BAND_PAL[2 * k + 1];
+  paletteVersion++;
+}
+
+// A hat, outfit or costume over the furious loop or the burst, from the
+// look_<slot>.bin files the app writes: runs of colour indices on the app's
+// 320 x 320 canvas, 255 clear, 254 where the piece hides Mole.
+struct Piece {
+  int x, y, w, h, frames, ncol;
+  const u32* col;
+  const u32* off;
+  const u8* rle;
+};
+
+struct Worn {
+  u8* file = nullptr;
+  Piece furious, burst;
+};
+
+static Worn worn[3];
+static int nWorn;
+
+static const u8* readPiece(const u8* p, const u8* end, Piece& out) {
+  if (p + 12 > end) return nullptr;
+  const u16* h = (const u16*)p;
+  out.x = (s16)h[0], out.y = (s16)h[1], out.w = h[2], out.h = h[3], out.frames = h[4], out.ncol = h[5];
+  out.col = (const u32*)(p + 12);
+  out.off = out.col + out.ncol;
+  out.rle = (const u8*)(out.off + out.frames + 1);
+  const u8* next = out.rle + ((out.off[out.frames] + 3) & ~3u);
+  return next <= end ? next : nullptr;
+}
+
+static void loadPieces() {
+  for (int i = 0; i < nWorn; i++) delete[] worn[i].file;
+  nWorn = 0;
+  static const char* SLOT[3] = {"body", "accessory", "hat"};  // the order they stack
+  for (int s = 0; s < 3; s++) {
+    File f;
+    if (File::Open(f, std::string(DIR) + "/look_" + SLOT[s] + ".bin", File::READ) != 0) continue;
+    u32 n = f.GetSize();
+    u8* b = new (std::nothrow) u8[n];
+    if (b && f.Read(b, n) == 0 && n > 4 && !memcmp(b, "MOLP", 4)) {
+      Worn& w = worn[nWorn];
+      const u8* p = readPiece(b + 4, b + n, w.furious);
+      if (p && readPiece(p, b + n, w.burst)) {
+        w.file = b, nWorn++;
+        b = nullptr;
+      }
+    }
+    delete[] b;
+    f.Close();
+  }
+}
+
 struct Canvas {
   const Fb& f;
   Canvas(const Fb& f) : f(f) {}
@@ -443,15 +515,37 @@ struct Canvas {
   void mole(const u8* rle, int x0, int y0, int w, int h) const {
     static u32 pal[sizeof(MOLE_PAL) / 4];
     static const Fb* last = nullptr;
-    if (last != &f) {
-      for (u32 i = 0; i < sizeof(MOLE_PAL) / 4; i++) pal[i] = f.enc(MOLE_PAL[i]);
-      last = &f;
+    static u32 lastVersion = ~0u;
+    if (last != &f || lastVersion != paletteVersion) {
+      for (u32 i = 0; i < sizeof(MOLE_PAL) / 4; i++) pal[i] = f.enc(molePal[i]);
+      last = &f, lastVersion = paletteVersion;
     }
     int n = w * h, at = 0;
     while (at < n) {
       int run = *rle++, idx = *rle++;
       if (idx != 255) {
         for (int k = 0; k < run; k++) f.put(x0 + (at + k) % w, y0 + (at + k) / w, pal[idx]);
+      }
+      at += run;
+    }
+  }
+  // Frame [i] of a worn piece, its canvas at (cx, cy). Where the piece hides
+  // Mole, the dimmed game from [snap] goes back (without one, it's left).
+  void piece(const Piece& p, int i, int cx, int cy, const Fb* snap) const {
+    if (i >= p.frames) i = p.frames - 1;
+    static u32 enc[254];
+    for (int k = 0; k < p.ncol && k < 254; k++) enc[k] = f.enc(p.col[k]);
+    const u8* rle = p.rle + p.off[i];
+    int n = p.w * p.h, at = 0, x0 = cx + p.x, y0 = cy + p.y;
+    while (at < n) {
+      int run = *rle++, idx = *rle++;
+      if (idx < 254) {
+        for (int k = 0; k < run; k++) f.put(x0 + (at + k) % p.w, y0 + (at + k) / p.w, enc[idx]);
+      } else if (idx == 254 && snap) {
+        for (int k = 0; k < run; k++) {
+          int x = x0 + (at + k) % p.w, y = y0 + (at + k) / p.w;
+          if ((unsigned)x < (unsigned)f.w && (unsigned)y < (unsigned)f.h) f.put(x, y, snap->raw(x, y));
+        }
       }
       at += run;
     }
@@ -502,6 +596,16 @@ namespace CTRPluginFramework {
 
 static char moleLine[240];
 static const int MOLE_X = 40, CAM_BURST = 12, CAM_MOLE = 6 - 129;
+static int camMole = CAM_MOLE;  // lower for a tall hat, so it isn't cut off
+
+static void fitPieces() {
+  int lift = 0;
+  for (int k = 0; k < nWorn; k++) {
+    int need = 2 - (CAM_MOLE + worn[k].furious.y);
+    if (need > lift) lift = need;
+  }
+  camMole = CAM_MOLE + (lift > 40 ? 40 : lift);
+}
 
 static double seconds() { return svcGetSystemTick() / (double)SYSCLOCK_ARM11; }
 static float ease(float t) { return t < 0 ? 0 : t > 1 ? 1 : t < 0.5f ? 4 * t * t * t : 1 - (-2 * t + 2) * (-2 * t + 2) * (-2 * t + 2) / 2; }
@@ -558,12 +662,19 @@ static int drawTop(const Fb& f, u8* snap, bool& boxBaked, double t, const Timeli
     int i = (int)(t * 30);
     if (i >= BURST_FRAMES) i = BURST_FRAMES - 1;
     c.mole(BURST_RLE + BURST_OFF[i], MOLE_X + BURST_X, CAM_BURST + BURST_Y, BURST_W, BURST_H);
+    Fb s(f, snap);
+    for (int k = 0; k < nWorn; k++) c.piece(worn[k].burst, i, MOLE_X, CAM_BURST, &s);
     return 0;
   }
   float p = skip ? 1 : ease((float)((t - tl.burstEnd) / (tl.panEnd - tl.burstEnd)));
-  int cam = CAM_BURST + (int)((CAM_MOLE - CAM_BURST) * p - 0.5f);
+  int cam = CAM_BURST + (int)((camMole - CAM_BURST) * p - 0.5f);
   int i = (int)(t * 30) % FURIOUS_FRAMES;
-  c.mole(FURIOUS_RLE + FURIOUS_OFF[i], MOLE_X + FURIOUS_X, cam + FURIOUS_Y, FURIOUS_W, FURIOUS_H);
+  Fb s(f, snap);
+  auto furious = [&]() {
+    c.mole(FURIOUS_RLE + FURIOUS_OFF[i], MOLE_X + FURIOUS_X, cam + FURIOUS_Y, FURIOUS_W, FURIOUS_H);
+    for (int k = 0; k < nWorn; k++) c.piece(worn[k].furious, i, MOLE_X, cam, &s);
+  };
+  furious();
   if (!skip && t < tl.panEnd) return 0;
   float q = skip ? 1 : (float)((t - tl.panEnd) / (tl.boxEnd - tl.panEnd));
   if (q > 1) q = 1;
@@ -585,7 +696,7 @@ static int drawTop(const Fb& f, u8* snap, bool& boxBaked, double t, const Timeli
     drawBox(Canvas(s));
     boxBaked = true;
     f.load(snap);
-    c.mole(FURIOUS_RLE + FURIOUS_OFF[i], MOLE_X + FURIOUS_X, cam + FURIOUS_Y, FURIOUS_W, FURIOUS_H);
+    furious();
   }
   int typed = (int)((t - tl.boxEnd) * 30);
   int len = strlen(moleLine);
@@ -607,7 +718,8 @@ static void drawTopStill(bool dim) {
       for (int y = 0; y < 240; y++)
         for (int x = 0; x < 400; x++) f.put(x, y, f.enc(lerp(f.dec(f.raw(x, y)), INK, 0.6f)));
     Canvas c(f);
-    c.mole(FURIOUS_RLE + FURIOUS_OFF[0], MOLE_X + FURIOUS_X, CAM_MOLE + FURIOUS_Y, FURIOUS_W, FURIOUS_H);
+    c.mole(FURIOUS_RLE + FURIOUS_OFF[0], MOLE_X + FURIOUS_X, camMole + FURIOUS_Y, FURIOUS_W, FURIOUS_H);
+    for (int k = 0; k < nWorn; k++) c.piece(worn[k].furious, 0, MOLE_X, camMole, nullptr);
     c.box(8, 162, 384, 72, CREAM);
     c.box(18, 151, 44, 17, CHESTNUT);
     c.text(40, 155, "MOLE", CREAM, true);
@@ -625,6 +737,10 @@ static bool block(const Rules& rules, bool bedtime, int minutes, int limit) {
        Process::GetTitleID());
   Process::Pause();
   plog("paused");
+  dressPalette(rules.fur, rules.band);
+  loadPieces();
+  fitPieces();
+  plog("look: fur %d band %d, %d pieces", rules.fur, rules.band, nWorn);
   soundsInit();
   plog("sounds ready");
   bool grace = !usedGraceToday(), keep = false;

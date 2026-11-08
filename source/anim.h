@@ -9,6 +9,10 @@ typedef struct {
   Tex3DS_SubTexture sub;
   int shown;  // frame in the texture, -1 = none
   int tileBytes;
+  bool rgb565;
+  bool dressed;   // the burst and the dance wear Mole's look (looks.h)
+  u32 look;       // the look version the shown frame was dressed in
+  char name[12];
 } Anim;
 
 bool animOpen(Anim* a, const char* name);

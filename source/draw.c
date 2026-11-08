@@ -1,4 +1,5 @@
 #include "draw.h"
+#include "looks.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -169,19 +170,35 @@ void imageTint(C2D_SpriteSheet s, int index, int x, int y, u32 color, float blen
 static int curMood = -1;
 static C2D_SpriteSheet moodSheets[4];
 
+static u32 curLook;
+static const MoodSheet SOLO = SOLO_SHEET_INIT;
+#define MOOD_COUNT_ ((int)(sizeof MOOD_SHEETS / sizeof MOOD_SHEETS[0]))
+
+// MOOD_COUNT is Dress up's loop: proud without his molehill.
+static const MoodSheet* sheetOf(int mood) { return mood >= MOOD_COUNT_ ? &SOLO : &MOOD_SHEETS[mood]; }
+
 void moodLoad(int mood) {
-  if (mood == curMood) return;
+  if (mood == curMood && curLook == looksVersion()) return;
   for (int i = 0; i < 4; i++) {
     if (moodSheets[i]) C2D_SpriteSheetFree(moodSheets[i]);
     moodSheets[i] = NULL;
   }
-  const MoodSheet* m = &MOOD_SHEETS[mood];
+  const MoodSheet* m = sheetOf(mood);
   char path[64];
   for (int i = 0; i < m->sheets && i < 4; i++) {
     snprintf(path, sizeof path, "romfs:/gfx/mood_%s_%d.t3x", m->name, i);
     moodSheets[i] = load(path);
+    // His fur and headband, and what a costume hides, go into the texture.
+    if (moodSheets[i]) {
+      static C2D_Image imgs[256];
+      int n = C2D_SpriteSheetCount(moodSheets[i]);
+      if (n > 256) n = 256;
+      for (int k = 0; k < n; k++) imgs[k] = C2D_SpriteSheetGetImage(moodSheets[i], k);
+      looksDressMood(mood >= MOOD_COUNT_ ? "proud" : m->name, imgs, n, i * m->perSheet, m->ox,
+                     m->oy);
+    }
   }
-  curMood = mood;
+  curMood = mood, curLook = looksVersion();
 }
 
 int moodLoaded(void) { return curMood; }
@@ -190,7 +207,7 @@ void moodDraw(int x, int y, u32 tick) { moodDrawEx(x, y, tick, 1, 1, 0); }
 
 void moodDrawEx(int x, int y, u32 tick, float sx, float sy, int lift) {
   if (curMood < 0) return;
-  const MoodSheet* m = &MOOD_SHEETS[curMood];
+  const MoodSheet* m = sheetOf(curMood);
   int step = tick / 2;  // 30 fps
   int n = m->frames, i;
   if (m->pingPong) {
@@ -205,6 +222,7 @@ void moodDrawEx(int x, int y, u32 tick, float sx, float sy, int lift) {
   int w = (int)(m->w * sx + 0.5f), h = (int)(m->h * sy + 0.5f);
   int dx = x + m->ox + (m->w - w) / 2, dy = y + m->oy + (m->h - h) - lift;
   C2D_DrawImageAt(img, dx + drawDX, dy, 0.5f, NULL, (float)w / m->w, (float)h / m->h);
+  looksDrawMood(i, dx + drawDX, dy, m->ox, m->oy, (float)w / m->w, (float)h / m->h);
 }
 
 // ------------------------------------------------------------- controls ----

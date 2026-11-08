@@ -1,4 +1,5 @@
 #include "anim.h"
+#include "looks.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,9 @@ bool animOpen(Anim* a, const char* name) {
   }
   a->frames = h->frames, a->w = h->w, a->h = h->h, a->fps = h->fps, a->ox = h->ox, a->oy = h->oy;
   a->tileBytes = h->tileRows * 8 * h->texW * 2;
+  a->rgb565 = !h->fmt;
+  snprintf(a->name, sizeof a->name, "%s", name);
+  a->dressed = !strcmp(name, "burst") || !strcmp(name, "dance");
   if (!C3D_TexInit(&a->tex, h->texW, h->texH, h->fmt ? GPU_RGBA5551 : GPU_RGB565)) {
     animClose(a);
     return false;
@@ -52,10 +56,12 @@ void animClose(Anim* a) {
 C2D_Image animFrame(Anim* a, int i) {
   if (i < 0) i = 0;
   if (i >= a->frames) i = a->frames - 1;
-  if (i != a->shown) {
+  if (i != a->shown || (a->dressed && a->look != looksVersion())) {
     const u32* offs = (const u32*)(a->file + sizeof(Header));
     uLongf size = a->tileBytes;
     uncompress(a->tex.data, &size, a->file + offs[i], offs[i + 1] - offs[i]);
+    if (a->dressed) looksDressFrame(a->name, i, &a->tex, a->w, a->h, a->ox, a->oy, a->rgb565);
+    a->look = looksVersion();
     C3D_TexFlush(&a->tex);
     a->shown = i;
   }

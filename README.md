@@ -12,7 +12,7 @@ A homebrew version of [ControlMole](https://controlmole.app) for the Nintendo 3D
 
 There are two parts:
 
-- **The app** (`ControlMole.3dsx` / `ControlMole.cia`) shows Mole on the top screen and has four tabs on the touch screen. Today has your score for the day, Games lists what you played and whether each game counts, Rules holds the limits, and Trophies has the shelf of trophies you can earn by staying under your limit.
+- **The app** (`ControlMole.3dsx` / `ControlMole.cia`) shows Mole on the top screen and has five tabs on the touch screen. Today has your score for the day, Games lists what you played and whether each game counts, Rules holds the limits, Trophies has the shelf of trophies you can earn by staying under your limit, and Dress Up lets you dress Mole like in the phone app.
 - **The plugin** (`ControlMole.3gx`) is a Luma3DS game plugin that runs inside every game. It counts the minutes you play, warns you five minutes before the limit, and pauses the game once you hit the limit or your bedtime. From there you can press A to close the game, B to get one 3-minute break a day so you can save, or X to keep the game paused under Mole so you can close the lid and carry on from the same spot tomorrow (or at 05:00 after a bedtime).
 
 You need a 3DS with [Luma3DS](https://github.com/LumaTeam/Luma3DS) installed.
@@ -28,6 +28,10 @@ You need a 3DS with [Luma3DS](https://github.com/LumaTeam/Luma3DS) installed.
 It has to be named exactly `default.3gx` and sit straight in `sdmc:/luma/plugins/`, not in a folder of its own (if you copied it there as `ControlMole.3gx`, the app renames it for you when you open the Rules tab), and it needs a Luma3DS with the plugin loader (v13 or newer). The screen flashes blue when a game starts if the plugin loaded. If Mole never shows up, open the Rules tab in the app: it says when the plugin last ran and in which game.
 
 The app and the plugin share their files in `sdmc:/3ds/ControlMole/`: `settings.ini` holds your rules, and `plays.log` gets a line for every play session.
+
+## Dress up
+
+In the Dress Up tab, Mole stands in his dressing room and tries on whatever you tap: a fur colour, a headband, a hat, something for his body (a cloak, overalls or the ghost costume) and an accessory. Most furs and headbands are prizes for trophies, like in the phone app, so a locked one shows a padlock and Mole tells you which trophy earns it, but you can still try it on. Every hat, outfit and costume is free to wear. He keeps the look everywhere, on the top screen, in the trophy dance and when he pops up in your games.
 
 ## Good to know
 

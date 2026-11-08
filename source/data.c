@@ -24,6 +24,11 @@ void settingsLoad(void) {
   while (fgets(line, sizeof line, f)) {
     char key[32];
     long long v;
+    if (!strncmp(line, "look=", 5)) {
+      snprintf(settings.look, sizeof settings.look, "%s", line + 5);
+      settings.look[strcspn(settings.look, "\r\n")] = 0;
+      continue;
+    }
     if (sscanf(line, "%31[^=]=%lli", key, &v) != 2) continue;
     if (!strcmp(key, "limit")) settings.limit = v;
     else if (!strcmp(key, "session_limit")) settings.sessionLimit = v;
@@ -73,6 +78,7 @@ void settingsSave(void) {
           settings.cleaned);
   for (int i = 0; i < 16; i++)
     if (settings.earnedAt[i]) fprintf(f, "earned_%d=%lld\n", i, settings.earnedAt[i]);
+  if (settings.look[0]) fprintf(f, "look=%s\n", settings.look);
   for (int i = 0; i < settings.skipped; i++)
     fprintf(f, "skip=%016llX\n", settings.skip[i]);
   // Days with their own rules: day_<Monday=0>=limit,bedtime hour.

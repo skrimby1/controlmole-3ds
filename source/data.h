@@ -32,6 +32,7 @@ typedef struct {
   int skipped;        // titles that don't count, below
   u64 skip[32];
   DayRules days[7];   // Monday = 0 ... Sunday = 6
+  char look[64];      // Dress up: "fur/band/hat/outfit/accessory" (looks.h)
 } Settings;
 
 extern Settings settings;

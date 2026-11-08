@@ -1,5 +1,6 @@
 #include <3ds.h>
 #include <citro2d.h>
+#include <ctype.h>
 #include <dirent.h>
 #include <math.h>
 #include <strings.h>
@@ -11,6 +12,7 @@
 #include "anim.h"
 #include "data.h"
 #include "draw.h"
+#include "looks.h"
 #include "mole.h"
 #include "sound.h"
 #include "titles.h"
@@ -18,8 +20,8 @@
 
 extern int drawDX;
 
-typedef enum { TAB_TODAY, TAB_GAMES, TAB_RULES, TAB_TROPHIES, TAB_COUNT } Tab;
-static const char* TAB_NAMES[TAB_COUNT] = {"TODAY", "GAMES", "RULES", "TROPHIES"};
+typedef enum { TAB_TODAY, TAB_GAMES, TAB_RULES, TAB_TROPHIES, TAB_DRESS, TAB_COUNT } Tab;
+static const char* TAB_NAMES[TAB_COUNT] = {"TODAY", "GAMES", "RULES", "TROPHIES", "DRESS UP"};
 
 static Tab tab = TAB_TODAY;
 static u32 tick;
@@ -30,6 +32,7 @@ static Scene scene = SCENE_MOLE;
 static u32 sceneAt;     // tick the scene started
 static u32 boxAt;       // tick the dialogue box started sliding in
 static Anim burst, dance;
+static C2D_SpriteSheet sheetLooks;  // Dress up's tiles and the dressing room
 
 static float easeOut(float t) { return 1 - (1 - t) * (1 - t) * (1 - t); }
 static float easeInOut(float t) { return t < 0.5f ? 4 * t * t * t : 1 - powf(-2 * t + 2, 3) / 2; }
@@ -232,19 +235,30 @@ static void drawTop(int eye, float depth) {
     box(86, 4, 228, 232, C_INK, false);
     C2D_Image f = animFrame(&dance, ((tick - sceneAt) / 2) % dance.frames);
     C2D_DrawImageAt(f, 88 + drawDX, 6, 0.5f, NULL, 1, 1);
+    looksDrawFrame("dance", ((tick - sceneAt) / 2) % dance.frames, 88 + drawDX, 6);
     drawDX = 0;
     return;
   }
 
   drawDX = 0;
   if (scene == SCENE_BURST) {
-    C2D_Image f = animFrame(&burst, (tick - sceneAt) / 2);
+    int i = (tick - sceneAt) / 2;
+    if (i >= burst.frames) i = burst.frames - 1;
+    C2D_Image f = animFrame(&burst, i);
     C2D_DrawImageAt(f, MOLE_X + burst.ox, CAM_BURST + burst.oy, 0.5f, NULL, 1, 1);
+    looksDrawFrame("burst", i, MOLE_X, CAM_BURST);
     return;
   }
-  int cam = CAM_MOLE;
+  // A tall hat moves him (and his room) down, so it isn't cut off.
+  int raise = scene == SCENE_MOLE || scene == SCENE_PAN ? looksLift(CAM_MOLE + 125) : 0;
+  if (tab == TAB_DRESS && scene == SCENE_MOLE) {
+    drawDX = eye ? far : -far;
+    image(sheetLooks, LOOK_TILE_ROOM, 0, raise - LOOK_ROOM_LIFT);
+    drawDX = 0;
+  }
+  int cam = CAM_MOLE + raise;
   if (scene == SCENE_PAN)
-    cam = CAM_BURST + (int)((CAM_MOLE - CAM_BURST) *
+    cam = CAM_BURST + (int)((CAM_MOLE + raise - CAM_BURST) *
                             easeInOut(clamp01((tick - sceneAt) / (float)PAN_TICKS)) - 0.5f);
   float sx, sy;
   int lift, dx;
@@ -852,6 +866,222 @@ static void drawTrophies(void) {
   noClip();
 }
 
+// ------------------------------------------------------------- dress up ----
+// Like the phone's Dress up: trophies earn furs and headbands to keep, every
+// hat, outfit and costume is his to wear, and anything can be tried on. He
+// stands in his dressing room on the top screen meanwhile.
+static Look worn;     // what he wears everywhere
+static Look trying;   // what he has on in Dress up, earned or not
+static int dressRow, dressCol;
+
+static const char* DRESS_ROWS[5] = {"FUR", "BAND", "HAT", "BODY", "ACCESSORY"};
+static const int DRESS_ROW_X[6] = {10, 62, 114, 166, 218, 310};
+
+// The saved look, with furs and headbands not earned yet back to classic.
+static Look wornLook(void) {
+  Look l;
+  lookParse(settings.look, &l);
+  if (!furEarned(l.fur, settings.trophies)) l.fur = 0;
+  if (!bandEarned(l.band, settings.trophies)) l.band = 0;
+  return l;
+}
+
+static int rowItems(int row, int* out) {
+  int n = 0;
+  if (row == 0) {
+    for (int i = 0; i < FUR_COUNT; i++) out[n++] = i;
+  } else if (row == 1) {
+    for (int i = 0; i < BAND_COUNT; i++) out[n++] = i;
+  } else {
+    out[n++] = 0;  // nothing
+    for (int i = 1; i < PIECE_COUNT; i++) {
+      PieceRow r = LOOK_PIECES[i].row;
+      if ((row == 2 && r == ROW_HAT) || (row == 3 && (r == ROW_BODY || r == ROW_COSTUME)) ||
+          (row == 4 && r == ROW_ACCESSORY))
+        out[n++] = i;
+    }
+  }
+  return n;
+}
+
+static int rowValue(const Look* l, int row) {
+  return row == 0 ? l->fur : row == 1 ? l->band : row == 2 ? l->hat : row == 3 ? l->body
+                                                                               : l->accessory;
+}
+
+static int itemTile(int row, int item) {
+  return (row == 0 ? LOOK_TILE_FUR : row == 1 ? LOOK_TILE_BAND : LOOK_TILE_PIECE) + item;
+}
+
+static int itemTrophy(int row, int item) {
+  return row == 0 ? LOOK_FURS[item].trophy : row == 1 ? LOOK_BANDS[item].trophy : -1;
+}
+
+static bool itemEarned(int row, int item) {
+  int t = itemTrophy(row, item);
+  return t < 0 || (settings.trophies >> t & 1);
+}
+
+// Mole's line for what he just put on (app/lib/l10n/en/dressup.arb, with
+// games where the phone says scrolling).
+static void sayPiece(int row, int item) {
+  char line[220];
+  int t = itemTrophy(row, item);
+  if (t >= 0 && !itemEarned(row, item)) {
+    if (trophyList[t].secret)
+      say1("Ooh, that's the prize for a secret trophy, and my lips are sealed! Keep your eyes "
+           "peeled, dig dig.");
+    else {
+      snprintf(line, sizeof line, "Looks good on me, right? It's yours to keep once you earn "
+               "the %s trophy, dig dig!", trophyList[t].name);
+      say1(line);
+    }
+    return;
+  }
+  if (row == 0) {
+    if (!item) say1("Back to my good old chestnut fur, dig dig!");
+    else {
+      snprintf(line, sizeof line, "%s fur? Ooh, I hardly recognise myself in the mirror!",
+               LOOK_FURS[item].name);
+      say1(line);
+    }
+    return;
+  }
+  if (row == 1) {
+    if (!item) say1("The red hachimaki, my lucky headband!");
+    else {
+      char name[16];
+      snprintf(name, sizeof name, "%s", LOOK_BANDS[item].name);
+      for (char* c = name; *c; c++) *c = tolower((unsigned char)*c);
+      snprintf(line, sizeof line, "A %s headband! It still ties on just as tight, dig dig.", name);
+      say1(line);
+    }
+    return;
+  }
+  if (!item) {
+    say1(row == 2 ? "Hat off! The classic look never goes out of style."
+                  : "Off it comes! Just me and my hachimaki again, dig dig.");
+    return;
+  }
+  static const char* LINES[][2] = {
+    {"tophat", "A top hat! Now I look like I own the whole burrow."},
+    {"party", "A party hat! Is it somebody's birthday? It isn't mine, but I'll take it!"},
+    {"beanie", "Ooh, cosy! Perfect for chilly mornings by the molehill."},
+    {"straw", "A sun hat, ready for a lazy afternoon in the garden, dig dig."},
+    {"crown", "A crown?! Bow before the King of the Burrow! I'm kidding... mostly."},
+    {"flower", "A daisy tucked in my headband, fresh from the garden!"},
+    {"nightcap", "My nightcap! Bedtime is bedtime, and that goes for your games too, dig dig."},
+    {"miner", "Miner's hat on, lamp on! Now I can dig through the night... but you can't play "
+              "through it, okay?"},
+    {"ghost", "Boooo! I'm the ghost of all the hours you played away!"},
+    {"scout", "Scout cloak on! Nothing gets over the wall while I'm on watch."},
+    {"overalls", "Overalls! Proper digging clothes, with pockets for snacks and none for your "
+                 "3DS, dig dig."},
+    {"specs", "Grandpa's specs! Now I can read every minute in your Activity Log, dig dig."},
+  };
+  for (size_t i = 0; i < sizeof LINES / sizeof LINES[0]; i++)
+    if (!strcmp(LINES[i][0], LOOK_PIECES[item].key)) {
+      say1(LINES[i][1]);
+      return;
+    }
+  snprintf(line, sizeof line, "%s! What do you think, does it suit me?", LOOK_PIECES[item].name);
+  say1(line);
+}
+
+// Wears what's earned straight away, so leaving Dress up keeps it on.
+static void saveLook(void) {
+  Look l = worn;
+  if (furEarned(trying.fur, settings.trophies)) l.fur = trying.fur;
+  if (bandEarned(trying.band, settings.trophies)) l.band = trying.band;
+  l.hat = trying.hat, l.body = trying.body, l.accessory = trying.accessory;
+  if (lookEqual(&l, &worn)) return;
+  worn = l;
+  lookKey(&worn, settings.look, sizeof settings.look);
+  settingsSave();
+  looksWritePlugin(&worn);
+}
+
+static void dressPick(int row, int item) {
+  Look l = trying;
+  bool costume = LOOK_PIECES[l.body].row == ROW_COSTUME;
+  switch (row) {
+    case 0: l.fur = item; break;
+    case 1: l.band = item; break;
+    case 2: l.hat = item; if (item && costume) l.body = 0; break;
+    case 3:
+      l.body = item;
+      if (item && LOOK_PIECES[item].row == ROW_COSTUME) l.hat = l.accessory = 0;
+      break;
+    default: l.accessory = item; if (item && costume) l.body = 0; break;
+  }
+  if (lookEqual(&l, &trying)) return;
+  trying = l;
+  sfx(SFX_HOP);
+  hopAt = tick, landed = false;
+  sayPiece(row, item);
+  saveLook();
+}
+
+static void dressRowTo(int row) {
+  int items[16], n = rowItems(row, items);
+  dressRow = row, dressCol = 0;
+  for (int i = 0; i < n; i++)
+    if (items[i] == rowValue(&trying, row)) dressCol = i;
+}
+
+static void drawDress(void) {
+  section(4, 4, BOT_W - 8, 200, "DRESS UP");
+  box(BOT_W - 72, 6, 60, 16, C_CREAM, touching && hit(BOT_W - 74, 4, 64, 20));
+  text(BOT_W - 42, 9, "CLASSIC", C_MUTED, ALIGN_CENTER);
+  if (hit(BOT_W - 74, 2, 64, 22) && !lookEqual(&trying, &LOOK_CLASSIC)) {
+    trying = LOOK_CLASSIC;
+    sfx(SFX_HOP);
+    hopAt = tick, landed = false;
+    say1("Chestnut fur, red headband, no hat: the classic Mole, dig dig.");
+    saveLook();
+    dressRowTo(dressRow);
+  }
+  for (int r = 0; r < 5; r++) {
+    bool on = r == dressRow;
+    int x = DRESS_ROW_X[r], w = DRESS_ROW_X[r + 1] - x - 4;
+    box(x, 26, w, 20, on ? C_BAND : C_CREAM, on);
+    text(x + w / 2, 31 + on, DRESS_ROWS[r], on ? C_CREAM : C_MUTED, ALIGN_CENTER);
+    if (hit(x, 24, w, 24) && !on) sfx(SFX_TAB), dressRowTo(r);
+  }
+  int items[16], n = rowItems(dressRow, items);
+  for (int i = 0; i < n; i++) {
+    int x = 12 + (i % 6) * 50, y = 54 + (i / 6) * 50;
+    int item = items[i];
+    bool wearing = rowValue(&trying, dressRow) == item, earned = itemEarned(dressRow, item);
+    if (wearing) rect(x - 2, y - 2, LOOK_TILE + 4, LOOK_TILE + 4, C_BAND);
+    else if (i == dressCol) rect(x - 2, y - 2, LOOK_TILE + 4, LOOK_TILE + 4, C_CREAM_D);
+    if (earned) {
+      image(sheetLooks, itemTile(dressRow, item), x, y);
+    } else {
+      imageTint(sheetLooks, itemTile(dressRow, item), x, y, C_INK, 0.55f);
+      // A little padlock in the corner.
+      int lx = x + LOOK_TILE - 13, ly = y + LOOK_TILE - 14;
+      rect(lx + 2, ly, 7, 2, C_CREAM);
+      rect(lx + 1, ly + 1, 2, 5, C_CREAM);
+      rect(lx + 8, ly + 1, 2, 5, C_CREAM);
+      rect(lx, ly + 5, 11, 8, C_CREAM);
+      rect(lx + 5, ly + 7, 1, 3, C_INK);
+    }
+    if (hit(x - 2, y - 2, LOOK_TILE + 4, LOOK_TILE + 4)) dressCol = i, dressPick(dressRow, item);
+  }
+}
+
+static void dressInput(u32 down, u32 repeat) {
+  if (down & KEY_DOWN && dressRow < 4) sfx(SFX_TAB), dressRowTo(dressRow + 1);
+  if (down & KEY_UP && dressRow > 0) sfx(SFX_TAB), dressRowTo(dressRow - 1);
+  int items[16], n = rowItems(dressRow, items);
+  int dir = repeat & KEY_RIGHT ? 1 : repeat & KEY_LEFT ? -1 : 0;
+  if (dir && dressCol + dir >= 0 && dressCol + dir < n) {
+    dressCol += dir;
+    dressPick(dressRow, items[dressCol]);
+  }
+}
+
 static void drawTabs(void) {
   const int w = BOT_W / TAB_COUNT, y = 210;
   for (int i = 0; i < TAB_COUNT; i++) {
@@ -877,6 +1107,12 @@ static void switchTabDir(Tab t, int dir) {
   if (t == TAB_RULES) rulesPlugin = -1, otherPlugins = -1, scope = -1, heldRow = -1;
   tab = t, scrollY = 0, cursor = 0;
   if (t == TAB_TROPHIES) sayTrophy(0);
+  else if (t == TAB_DRESS) {
+    trying = worn;
+    dressRowTo(0);
+    say1("Try things on me! Trophies earn you furs and headbands to keep, and every hat and "
+         "outfit is yours to wear, dig dig.");
+  }
   else if (t == TAB_RULES) say1("These are our rules. Tap a day up top to give it its own, "
                                 "and I'll keep you to them, dig dig!");
   else say(mole.count, mole.lines);
@@ -890,6 +1126,7 @@ static void drawTab(Tab t) {
     case TAB_GAMES: drawGames(); break;
     case TAB_RULES: drawRules(); break;
     case TAB_TROPHIES: drawTrophies(); break;
+    case TAB_DRESS: drawDress(); break;
     default: break;
   }
 }
@@ -964,15 +1201,19 @@ static void input(u32 down, u32 held, u32 repeat) {
     return;
   }
   if (down & KEY_A && tab != TAB_RULES && boxReady()) {
-    if (dialogueDone()) poke(mole.mood);
+    if (dialogueDone()) poke(tab == TAB_DRESS ? MOOD_PROUD : mole.mood);
     dialogueNext();
   }
   // X pokes Mole on any tab.
-  if (down & KEY_X && boxReady()) poke(mole.mood);
+  if (down & KEY_X && boxReady()) poke(tab == TAB_DRESS ? MOOD_PROUD : mole.mood);
   if (down & KEY_R) switchTabDir((tab + 1) % TAB_COUNT, 1);
   if (down & KEY_L) switchTabDir((tab + TAB_COUNT - 1) % TAB_COUNT, -1);
   if (tab == TAB_RULES) {
     if (!sliding()) rulesInput(down, repeat);
+    return;
+  }
+  if (tab == TAB_DRESS) {
+    if (!sliding()) dressInput(down, repeat);
     return;
   }
   int rows = tab == TAB_GAMES ? nGames : tab == TAB_TROPHIES ? TROPHIES : 0;
@@ -1012,6 +1253,10 @@ int main(void) {
     settingsSave();
   }
   playlogLoad();
+  sheetLooks = C2D_SpriteSheetLoad("romfs:/gfx/looks.t3x");
+  worn = wornLook();
+  looksShow(&worn);
+  looksWritePlugin(&worn);
   refresh(true);
   moodLoad(mole.mood);
   animOpen(&happy, "happy");
@@ -1049,7 +1294,10 @@ int main(void) {
       startDance(freshTrophies);
       freshTrophies = 0;
     }
-    if (moodLoaded() != (int)mole.mood && scene != SCENE_BURST) moodLoad(mole.mood);
+    // Dress up shows him proud, in whatever he's trying on.
+    worn = wornLook();
+    looksShow(tab == TAB_DRESS && !title ? &trying : &worn);
+    if (scene != SCENE_BURST) moodLoad(tab == TAB_DRESS && !title ? MOOD_COUNT : mole.mood);
     updateScene();
     if (title) updateTitle();
     if (title) {
@@ -1057,7 +1305,7 @@ int main(void) {
     } else if (scene == SCENE_DANCE) {
       typeOn(MOOD_PROUD);
     } else if (boxReady()) {
-      typeOn(mole.mood);
+      typeOn(tab == TAB_DRESS ? MOOD_PROUD : mole.mood);
     }
 
     float depth = osGet3DSliderState();
@@ -1083,6 +1331,8 @@ int main(void) {
   animClose(&burst);
   animClose(&dance);
   animClose(&happy);
+  looksExit();
+  if (sheetLooks) C2D_SpriteSheetFree(sheetLooks);
   titlesExit();
   soundExit();
   drawExit();
