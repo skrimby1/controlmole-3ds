@@ -492,6 +492,14 @@ static void babble(char c) {
 }
 
 // ------------------------------------------------------------ the block ----
+static volatile bool away = false;  // in HOME Menu or asleep: not playing
+
+}  // namespace CTRPluginFramework
+// CTRPF's sound service: its own exit path closes it, but closing the game
+// from the block screen doesn't go through there, so it's closed by hand.
+extern "C" void ncsndExit(void);
+namespace CTRPluginFramework {
+
 static char moleLine[240];
 static const int MOLE_X = 40, CAM_BURST = 12, CAM_MOLE = 6 - 129;
 
@@ -645,8 +653,9 @@ static bool block(const Rules& rules, bool bedtime, int minutes, int limit) {
   // The dimmed game, built once in the framebuffer's own layout.
   u8* dimmed = new (std::nothrow) u8[top.bytes];
   if (!dimmed) plog("no memory for the snapshot, drawing him still");
-  else top.save(dimmed);
-  if (dimmed) {
+  auto snapshot = [&]() {
+    if (!dimmed) return;
+    top.save(dimmed);
     Fb d(top, dimmed);
     for (int y = 0; y < 240; y++)
       for (int x = 0; x < 400; x++) {
@@ -655,7 +664,8 @@ static bool block(const Rules& rules, bool bedtime, int minutes, int limit) {
         memcpy(&v, q, d.bpp);
         d.store(q, d.enc(lerp(d.dec(v), INK, 0.6f)));
       }
-  }
+  };
+  snapshot();
   plog("snapshot %lu bytes", top.bytes);
   bool baked = false;
   for (int i = 0; i < 2; i++) {
@@ -683,7 +693,37 @@ static bool block(const Rules& rules, bool bedtime, int minutes, int limit) {
   bool prevTouch = true;
   int frames = 0;
   bool fpsLogged = false;
+  s64 lastNow = now();
   while (true) {
+    // The lid: a paused game can't answer the console going to sleep and
+    // waking up (its screens stayed black), so the game runs while the lid
+    // is shut, and Mole comes back over it once it's open again.
+    if (away || now() - lastNow > 3) {
+      plog("lid closed, game running");
+      Process::Play();
+      while (away) Sleep(Milliseconds(100));
+      Sleep(Seconds(2));  // its screens back on
+      Process::Pause();
+      Fb fresh(OSD::GetTopScreen(), 400, 240);
+      if (fresh.ok() && fresh.bytes == top.bytes) top = fresh, snapshot();
+      plog("lid open, Mole back");
+      baked = false;
+      if (keep)
+        snprintf(moleLine, sizeof moleLine,
+                 "Hey, back already? %s, so close that lid and get some sleep. "
+                 "Your game isn't going anywhere, dig dig!",
+                 bedtime ? "It's still the middle of the night" : "Tomorrow isn't here yet");
+      len = strlen(moleLine);
+      skip = true, lastTyped = 0;
+      start = seconds() - tl.boxEnd;
+      for (int k = 0; k < 2; k++) {
+        Fb b(OSD::GetBottomScreen(), 320, 240);
+        drawBottom(Canvas(b), bedtime, minutes, limit, grace, keep);
+        OSD::SwapBuffers();
+      }
+      if (!dimmed) drawTopStill(true);
+    }
+    lastNow = now();
     double t = seconds() - start;
     if (++frames && !fpsLogged && t > 5) fpsLogged = true, plog("%.1f fps", frames / t);
     int typed = len;
@@ -738,6 +778,7 @@ static bool block(const Rules& rules, bool bedtime, int minutes, int limit) {
       logEvent("walk");
       Sleep(Milliseconds(150));
       delete[] dimmed;
+      ncsndExit();  // or the next app finds the sound service still taken
       Process::ReturnToHomeMenu();
     }
     if (!keep && (down & Key::X)) {
@@ -825,7 +866,6 @@ static void headsUp(int left) {
 }
 
 // ---------------------------------------------------------------- main ----
-static volatile bool away = false;  // in HOME Menu or asleep: not playing
 
 static void onEvent(Process::Event e) {
   if (e == Process::Event::HOME_ENTER || e == Process::Event::SLEEP_ENTER ||
@@ -854,7 +894,10 @@ int main(void) {
   // Only games and apps count: Luma also loads plugins into System Settings,
   // the Camera, Sound and the other built-in titles (0004001x), and Mole has
   // no business in there.
-  if ((tid >> 32) != 0x00040000) return 0;
+  if ((tid >> 32) != 0x00040000) {
+    ncsndExit();  // these apps want the sound service for themselves
+    return 0;
+  }
   // The app shows this line, so you can tell the plugin is really running.
   plog("start %016llX", tid);
   Rules rules = readRules();
