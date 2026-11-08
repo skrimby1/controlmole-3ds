@@ -847,14 +847,14 @@ void PatchProcess(FwkSettings& settings) {
 void OnProcessExit(void) {}
 
 int main(void) {
+  Process::SetProcessEventCallback(onEvent);
+  OSD::Run(headsUpOsd);
   u64 tid = Process::GetTitleID();
   if (tid == 0x000400000C0DE500ULL) return 0;  // ControlMole itself: nothing to watch
   // Only games and apps count: Luma also loads plugins into System Settings,
   // the Camera, Sound and the other built-in titles (0004001x), and Mole has
   // no business in there.
   if ((tid >> 32) != 0x00040000) return 0;
-  Process::SetProcessEventCallback(onEvent);
-  OSD::Run(headsUpOsd);
   // The app shows this line, so you can tell the plugin is really running.
   plog("start %016llX", tid);
   Rules rules = readRules();
