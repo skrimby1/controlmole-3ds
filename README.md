@@ -1,13 +1,13 @@
 # ControlMole App | Promotion
 <p align="center">
-  <a href="https://controlmole.app/"><img src="assets/controlmole_icon.png" width="120" alt="ControlMole app icon"></a>
+  <a href="https://controlmole.app/"><img src="controlmole_icon.png" width="120" alt="ControlMole app icon"></a>
 </p>
 <p align="center">
   Heads up, the mod also exists as an app for your phone (which i developed), for both Android and IOS ᕙ(  •̀ ᗜ •́  )ᕗ 
 <p align="center">
-  <a href="https://controlmole.app/play"><img src="assets/google-play-badge.png" height="40" alt="Get it on Google Play"></a>
+  <a href="https://controlmole.app/play"><img src="google-play-badge.png" height="40" alt="Get it on Google Play"></a>
   &nbsp;
-  <a href="https://controlmole.app/appstore"><img src="assets/app-store.svg" height="40" alt="Download on the App Store"></a>
+  <a href="https://controlmole.app/appstore"><img src="app-store.svg" height="40" alt="Download on the App Store"></a>
 </p>
 
 # ControlMole for 3DS
