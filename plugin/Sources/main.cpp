@@ -445,6 +445,7 @@ static void loadPieces() {
 
 struct Canvas {
   const Fb& f;
+  int behind = 1 << 30;  // Mole and his pieces stop at this row (the dialogue box)
   Canvas(const Fb& f) : f(f) {}
 
   void px(int x, int y, u32 c) const { f.put(x, y, f.enc(c)); }
@@ -524,7 +525,10 @@ struct Canvas {
     while (at < n) {
       int run = *rle++, idx = *rle++;
       if (idx != 255) {
-        for (int k = 0; k < run; k++) f.put(x0 + (at + k) % w, y0 + (at + k) / w, pal[idx]);
+        for (int k = 0; k < run; k++) {
+          int y = y0 + (at + k) / w;
+          if (y < behind) f.put(x0 + (at + k) % w, y, pal[idx]);
+        }
       }
       at += run;
     }
@@ -540,11 +544,15 @@ struct Canvas {
     while (at < n) {
       int run = *rle++, idx = *rle++;
       if (idx < 254) {
-        for (int k = 0; k < run; k++) f.put(x0 + (at + k) % p.w, y0 + (at + k) / p.w, enc[idx]);
+        for (int k = 0; k < run; k++) {
+          int y = y0 + (at + k) / p.w;
+          if (y < behind) f.put(x0 + (at + k) % p.w, y, enc[idx]);
+        }
       } else if (idx == 254 && snap) {
         for (int k = 0; k < run; k++) {
           int x = x0 + (at + k) % p.w, y = y0 + (at + k) / p.w;
-          if ((unsigned)x < (unsigned)f.w && (unsigned)y < (unsigned)f.h) f.put(x, y, snap->raw(x, y));
+          if ((unsigned)x < (unsigned)f.w && (unsigned)y < (unsigned)f.h && y < behind)
+            f.put(x, y, snap->raw(x, y));
         }
       }
       at += run;
@@ -666,6 +674,8 @@ static int drawTop(const Fb& f, u8* snap, bool& boxBaked, double t, const Timeli
     for (int k = 0; k < nWorn; k++) c.piece(worn[k].burst, i, MOLE_X, CAM_BURST, &s);
     return 0;
   }
+  // Once the box is up, Mole stands behind it (a tall hat lowers him into it).
+  if (boxBaked) c.behind = 162;
   float p = skip ? 1 : ease((float)((t - tl.burstEnd) / (tl.panEnd - tl.burstEnd)));
   int cam = CAM_BURST + (int)((camMole - CAM_BURST) * p - 0.5f);
   int i = (int)(t * 30) % FURIOUS_FRAMES;
@@ -695,6 +705,7 @@ static int drawTop(const Fb& f, u8* snap, bool& boxBaked, double t, const Timeli
     Fb s(f, snap);
     drawBox(Canvas(s));
     boxBaked = true;
+    c.behind = by;
     f.load(snap);
     furious();
   }
