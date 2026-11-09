@@ -3,7 +3,7 @@
   <a href="https://controlmole.app/"><img src="assets/controlmole_icon.png" width="120" alt="ControlMole app icon"></a>
 </p>
 <p align="center">
-  Heads up, the mod also exists as an app for your phone (which i developed), for both Android and IOS. You can check it out at https://controlmole.app/ ᕙ(  •̀ ᗜ •́  )ᕗ 
+  Heads up, the mod also exists as an app for your phone (which i developed), for both Android and IOS ᕙ(  •̀ ᗜ •́  )ᕗ 
 <p align="center">
   <a href="https://controlmole.app/play"><img src="assets/google-play-badge.png" height="40" alt="Get it on Google Play"></a>
   &nbsp;
